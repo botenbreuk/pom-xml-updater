@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pom-xml-updater"
+version = "1.0.0.dev0"
+description = "Desktop application for managing Maven pom.xml dependencies"
+requires-python = ">=3.11"
+dependencies = [
+    "PyQt6>=6.11.0",
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+pom-xml-updater = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*", "core*", "models*", "workers*"]
+
+[tool.setuptools.package-data]
+"*" = ["assets/*"]
