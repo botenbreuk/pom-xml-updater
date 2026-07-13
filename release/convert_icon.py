@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Convert assets/app_icon_clean.png to platform-specific icon formats."""
-import io
-import struct
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -28,29 +29,34 @@ def create_ico(output_path: Path) -> None:
 
 
 def create_icns(output_path: Path) -> None:
-    icon_types = [
-        ("icp4", 16),
-        ("icp5", 32),
-        ("icp6", 64),
-        ("ic07", 128),
-        ("ic08", 256),
-        ("ic09", 512),
-        ("ic10", 1024),
+    if shutil.which("iconutil") is None:
+        print("Error: iconutil not found. Building .icns requires macOS.")
+        sys.exit(1)
+
+    # Standard Apple iconset naming: (size, filename).
+    names = [
+        (16, "icon_16x16.png"),
+        (32, "icon_16x16@2x.png"),
+        (32, "icon_32x32.png"),
+        (64, "icon_32x32@2x.png"),
+        (128, "icon_128x128.png"),
+        (256, "icon_128x128@2x.png"),
+        (256, "icon_256x256.png"),
+        (512, "icon_256x256@2x.png"),
+        (512, "icon_512x512.png"),
+        (1024, "icon_512x512@2x.png"),
     ]
 
-    entries = []
-    for type_code, size in icon_types:
-        buf = io.BytesIO()
-        resized(size).save(buf, format="PNG")
-        entries.append((type_code.encode("ascii"), buf.getvalue()))
+    with tempfile.TemporaryDirectory() as tmp:
+        iconset_dir = Path(tmp) / "icon.iconset"
+        iconset_dir.mkdir()
+        for size, name in names:
+            resized(size).save(iconset_dir / name)
 
-    body = b""
-    for type_code, png_bytes in entries:
-        entry_length = 8 + len(png_bytes)
-        body += type_code + struct.pack(">I", entry_length) + png_bytes
-
-    total_length = 8 + len(body)
-    output_path.write_bytes(b"icns" + struct.pack(">I", total_length) + body)
+        subprocess.run(
+            ["iconutil", "-c", "icns", "-o", str(output_path), str(iconset_dir)],
+            check=True,
+        )
     print(f"Created {output_path} ({output_path.stat().st_size:,} bytes)")
 
 
