@@ -25,6 +25,7 @@ A desktop app for keeping your Maven dependencies up to date. It works with **Ma
 - **Group filtering** — show only `dependencies`, `dependencyManagement`, `plugins`, or the `parent` POM
 - **Hide up-to-date** — collapse rows that have no available upgrade
 - **Merge Patch and Minor** — optional display setting that combines the Patch and Minor columns into one
+- **Resizable columns** — drag the dividers in the table header to resize columns; widths are remembered between sessions
 - **Git integration** — current branch shown in the toolbar; a pull button appears when the working copy is behind the remote
 - **JDK hint** — the project's `.sdkmanrc` / `.java-version` is shown in the status bar with a warning when it doesn't match the running JDK
 - **Recent files** — start screen remembers the last opened projects with last-checked timestamps; scrollable when the list grows long

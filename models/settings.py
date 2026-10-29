@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -66,6 +67,8 @@ class AppSettings:
     # {"path/to/project-dir": "mvn" | "mvnw" | "mvnd"}
     old_version_threshold: int = 12   # number of months or years (0 = disabled)
     old_version_unit: str = "months"  # "months" | "years"
+    column_widths: dict = field(default_factory=dict)
+    # {"group": 74.0, "major": 180.0, ...} — dependency-table columns, in pixels
 
     # ── resolved theme ────────────────────────────────────────────────────────
 
@@ -152,6 +155,26 @@ class AppSettings:
                 clean[str(path)] = tool.id
         return clean
 
+    # ── table column widths ───────────────────────────────────────────────────
+
+    def set_column_widths(self, widths: dict) -> None:
+        """Store the dependency-table column widths (validated) and persist
+        immediately."""
+        self.column_widths = self._sanitize_column_widths(widths)
+        self.save()
+
+    @staticmethod
+    def _sanitize_column_widths(raw) -> dict:
+        """Keep only entries whose width is a positive, finite number."""
+        if not isinstance(raw, dict):
+            return {}
+        return {
+            str(name): float(width)
+            for name, width in raw.items()
+            if isinstance(width, (int, float)) and not isinstance(width, bool)
+            and math.isfinite(width) and width > 0
+        }
+
     # ── persistence ───────────────────────────────────────────────────────────
 
     def load(self) -> None:
@@ -181,6 +204,12 @@ class AppSettings:
             raw_overrides = {}
         self.build_tool_overrides = self._sanitize_overrides(raw_overrides)
 
+        try:
+            raw_widths = json.loads(s.value("column_widths", "{}"))
+        except Exception:
+            raw_widths = {}
+        self.column_widths = self._sanitize_column_widths(raw_widths)
+
         raw_theme = s.value("theme", None)
         if raw_theme in ("light", "dark", "system"):
             self.theme = raw_theme
@@ -200,3 +229,4 @@ class AppSettings:
         s.setValue("pending_installs", json.dumps(self.pending_installs))
         s.setValue("default_build_tool",    self.default_build_tool)
         s.setValue("build_tool_overrides",  json.dumps(self.build_tool_overrides))
+        s.setValue("column_widths",         json.dumps(self.column_widths))

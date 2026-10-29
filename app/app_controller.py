@@ -165,6 +165,17 @@ class AppController(QObject):
     def oldAgeThresholdDays(self) -> int:
         return self._settings.old_version_threshold_days
 
+    # ── dependency-table column widths (seeded once, saved after each drag) ────
+
+    @pyqtProperty("QVariantMap", constant=True)
+    def columnWidthsInitial(self) -> dict:
+        return self._settings.column_widths
+
+    @pyqtSlot("QVariantMap")
+    def setColumnWidths(self, widths: dict) -> None:
+        # No flash here: it would pop up after every column drag.
+        self._settings.set_column_widths(widths)
+
     # ── settings-form values (read by the settings page) ───────────────────────
 
     @pyqtProperty(int, notify=settingsChanged)
