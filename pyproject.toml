@@ -8,8 +8,8 @@ version = "1.0.1.dev0"
 description = "Desktop application for managing Maven pom.xml dependencies"
 requires-python = ">=3.11"
 dependencies = [
-    "PyQt6>=6.11.0",
-    "requests>=2.34.2",
+    "PyQt6==6.12.0",
+    "requests==2.34.2",
 ]
 
 [project.scripts]
