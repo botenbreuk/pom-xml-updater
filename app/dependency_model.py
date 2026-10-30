@@ -184,6 +184,16 @@ class DependencyModel(QAbstractListModel):
     def selected_deps(self) -> list[DependencyInfo]:
         return [d for d in self._deps if row_id(d) in self._selected]
 
+    def longest_versions(self) -> dict[str, str]:
+        """The longest version offered in each update column ('' when it has none)."""
+        longest = {"patch": "", "minor": "", "major": ""}
+        for dep in self._deps:
+            for key, version in (("patch", dep.latest_patch), ("minor", dep.latest_minor),
+                                 ("major", dep.latest_major)):
+                if version and len(version) > len(longest[key]):
+                    longest[key] = version
+        return longest
+
 
 class DependencyFilterProxy(QSortFilterProxyModel):
     def __init__(self, parent=None) -> None:

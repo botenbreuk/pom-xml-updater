@@ -38,7 +38,7 @@ Rectangle {
     // ── column metrics (set by the ListView delegate) ───────────────────────
     property real wSelect: 52
     property real wGroup: 74
-    property real wCurrent: 150
+    property real wCurrent: 170
     property real wType: 110
     property real wPatch: 150
     property real wMinor: 150
@@ -92,6 +92,23 @@ Rectangle {
     })
     readonly property var grpColor: paletteFor(groupColors, group, Theme.dark ? ({ bg: "#1e293b", fg: "#94a3b8" }) : ({ bg: "#e5e7eb", fg: "#374151" }))
     readonly property var typColor: paletteFor(typeColors, constraintType, Theme.dark ? ({ bg: "#1e293b", fg: "#94a3b8" }) : ({ bg: "#f1f5f9", fg: "#475569" }))
+
+    component PendingBadge: Rectangle {
+        implicitHeight: 18
+        implicitWidth: pendingLabel.implicitWidth + 12
+        radius: 4
+        color: Theme.dark ? "#451a03" : "#fef3c7"
+        border.width: 1
+        border.color: Theme.dark ? "#b45309" : "#fcd34d"
+        Text {
+            id: pendingLabel
+            anchors.centerIn: parent
+            text: qsTr("pending")
+            font.pixelSize: 11
+            font.bold: true
+            color: Theme.dark ? "#fcd34d" : "#92400e"
+        }
+    }
 
     Rectangle {
         anchors.bottom: parent.bottom
@@ -171,49 +188,68 @@ Rectangle {
         }
 
         Item {
+            id: currentCell
             Layout.preferredWidth: row.wCurrent
             Layout.fillHeight: true
-            RowLayout {
+            clip: true
+
+            // One line when it fits; in a narrower column the pending badge moves
+            // under the version, and a version that still doesn't fit is elided.
+            readonly property bool stacked: row.needsInstall
+                && versionText.implicitWidth + 6 + inlineBadge.implicitWidth
+                   + (row.showWarn ? 6 + warnIcon.implicitWidth : 0) > width - 12
+
+            ColumnLayout {
                 anchors.centerIn: parent
-                spacing: 6
+                width: Math.min(implicitWidth, currentCell.width - 12)
+                spacing: 2
 
-                Text {
-                    text: row.currentVersion
-                    font.family: Theme.monoFamily
-                    font.pixelSize: 14
-                    color: Theme.textTable
-                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.maximumWidth: implicitWidth
+                    Layout.alignment: Qt.AlignHCenter
+                    spacing: 6
 
-                Rectangle {
-                    visible: row.needsInstall
-                    implicitHeight: 18
-                    implicitWidth: pendingLabel.implicitWidth + 12
-                    radius: 4
-                    color: Theme.dark ? "#451a03" : "#fef3c7"
-                    border.width: 1
-                    border.color: Theme.dark ? "#b45309" : "#fcd34d"
                     Text {
-                        id: pendingLabel
-                        anchors.centerIn: parent
-                        text: qsTr("pending")
-                        font.pixelSize: 11
-                        font.bold: true
-                        color: Theme.dark ? "#fcd34d" : "#92400e"
+                        id: versionText
+                        Layout.fillWidth: true
+                        text: row.currentVersion
+                        font.family: Theme.monoFamily
+                        font.pixelSize: 14
+                        color: Theme.textTable
+                        elide: Text.ElideRight
+
+                        HoverHandler { id: versionHover }
+                        AppToolTip {
+                            visible: versionHover.hovered && versionText.truncated
+                            delay: 400
+                            text: versionText.text
+                        }
+                    }
+
+                    PendingBadge {
+                        id: inlineBadge
+                        visible: row.needsInstall && !currentCell.stacked
+                    }
+
+                    Text {
+                        id: warnIcon
+                        visible: row.showWarn
+                        text: "⚠"
+                        font.pixelSize: 14
+                        color: Theme.warn
+                        readonly property string warnText: row.fmtAgeWarn(row.currentAge)
+                        HoverHandler { id: warnHover }
+                        AppToolTip {
+                            visible: warnHover.hovered
+                            text: warnIcon.warnText
+                        }
                     }
                 }
 
-                Text {
-                    id: warnIcon
-                    visible: row.showWarn
-                    text: "⚠"
-                    font.pixelSize: 14
-                    color: Theme.warn
-                    readonly property string warnText: row.fmtAgeWarn(row.currentAge)
-                    HoverHandler { id: warnHover }
-                    AppToolTip {
-                        visible: warnHover.hovered
-                        text: warnIcon.warnText
-                    }
+                PendingBadge {
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: currentCell.stacked
                 }
             }
         }

@@ -15,25 +15,44 @@ Rectangle {
 
     readonly property real wSelect: 52
     readonly property real wDepMin: 240
-    readonly property var defaultWidths: ({ "group": 74, "current": 150, "type": 110,
+    readonly property var defaultWidths: ({ "group": 74, "current": 170, "type": 110,
                                             "patch": 150, "minor": 150, "major": 150 })
     // Set by dragging the header dividers, and saved; the Dependency column takes the rest.
     property var widths: Object.assign({}, frame.defaultWidths, App.columnWidthsInitial)
     readonly property bool mergeMode: App.mergePatchMinor
 
-    // The widths as laid out. When the window is too narrow for the dragged widths to
-    // leave Dependency wDepMin, the width dragged beyond each default is handed back
-    // proportionally; it returns once there is room again.
+    // The update columns never get narrower than their longest version plus the ↑
+    // button: VersionCell's 10 left margin, 6 spacing, 24 button and right inset.
+    readonly property font versionFont: Qt.font({ family: Theme.monoFamily, pixelSize: 14, bold: true })
+    TextMetrics { id: longestPatch; font: frame.versionFont; text: Project.longestVersions.patch }
+    TextMetrics { id: longestMinor; font: frame.versionFont; text: Project.longestVersions.minor }
+    TextMetrics { id: longestMajor; font: frame.versionFont; text: Project.longestVersions.major }
+    readonly property var minWidths: {
+        const fit = (text, rightInset) => text > 0 ? Math.ceil(text) + 40 + rightInset : 0
+        const minor = frame.mergeMode ? Math.max(longestMinor.advanceWidth, longestPatch.advanceWidth)
+                                      : longestMinor.advanceWidth
+        return {
+            "patch": fit(longestPatch.advanceWidth, 8),
+            "minor": fit(minor, 8),
+            "major": fit(longestMajor.advanceWidth, 18)
+        }
+    }
+
+    // The widths as laid out: the dragged widths, raised to minWidths. When the window
+    // is too narrow for them to leave Dependency wDepMin, the width dragged beyond each
+    // default is handed back proportionally; it returns once there is room again.
     readonly property var fittedWidths: {
-        const extra = (k) => Math.max(0, frame.widths[k] - frame.defaultWidths[k])
+        const min = (k) => frame.minWidths[k] || 0
+        const wanted = (k) => Math.max(frame.widths[k], min(k))
+        const extra = (k) => Math.max(0, wanted(k) - Math.max(frame.defaultWidths[k], min(k)))
         const shown = Object.keys(frame.defaultWidths).filter((k) => k !== "patch" || !frame.mergeMode)
-        const total = shown.reduce((sum, k) => sum + frame.widths[k], 0)
+        const total = shown.reduce((sum, k) => sum + wanted(k), 0)
         const totalExtra = shown.reduce((sum, k) => sum + extra(k), 0)
         const shortBy = frame.wDepMin - (frame.width - frame.wSelect - total)
         const handBack = totalExtra > 0 ? Math.min(1, Math.max(0, shortBy) / totalExtra) : 0
         const fitted = {}
         for (const k in frame.defaultWidths)
-            fitted[k] = Math.round(frame.widths[k] - extra(k) * handBack)
+            fitted[k] = Math.round(wanted(k) - extra(k) * handBack)
         return fitted
     }
     // A drag never squeezes the Dependency column below wDepMin.
@@ -112,6 +131,7 @@ Rectangle {
                     visible: !frame.mergeMode
                     text: qsTr("Patch ↑")
                     center: true
+                    cellMinWidth: frame.minWidths.patch
                     resizeEdge: "left"
                     spareWidth: frame.spareWidth
                     onResized: (w) => frame.resizeColumn("patch", w)
@@ -121,6 +141,7 @@ Rectangle {
                     Layout.preferredWidth: frame.fittedWidths.minor
                     text: frame.mergeMode ? qsTr("Minor / Patch ↑") : qsTr("Minor ↑")
                     center: true
+                    cellMinWidth: frame.minWidths.minor
                     resizeEdge: "left"
                     spareWidth: frame.spareWidth
                     onResized: (w) => frame.resizeColumn("minor", w)
@@ -130,6 +151,7 @@ Rectangle {
                     Layout.preferredWidth: frame.fittedWidths.major
                     text: qsTr("Major ↑")
                     center: true
+                    cellMinWidth: frame.minWidths.major
                     resizeEdge: "left"
                     spareWidth: frame.spareWidth
                     onResized: (w) => frame.resizeColumn("major", w)

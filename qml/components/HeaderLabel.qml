@@ -12,8 +12,10 @@ Item {
     property real spareWidth: 0      // how much wider a drag may make the column
 
     // Narrowest a drag can make the column: fits the header text and the usual cell
-    // badges and versions. Columns with wider cells set a larger value.
-    property real minWidth: Math.max(72, label.implicitWidth + 24)
+    // badges and versions. Columns with wider cells set a larger value, or raise it
+    // through cellMinWidth when the width their cells need varies.
+    property real cellMinWidth: 0
+    property real minWidth: Math.max(72, label.implicitWidth + 24, cellMinWidth)
 
     signal resized(real width)
     signal resizeFinished()

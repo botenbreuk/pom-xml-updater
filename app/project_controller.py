@@ -31,6 +31,7 @@ class ProjectController(QObject):
     countChanged = pyqtSignal()
     selectionChanged = pyqtSignal()
     progressChanged = pyqtSignal()
+    longestVersionsChanged = pyqtSignal()
     infoMessage = pyqtSignal(str, str)              # title, body
     confirmUpdateAll = pyqtSignal(int, str, str)    # count, mode label, mode key
 
@@ -63,6 +64,10 @@ class ProjectController(QObject):
         self._selected_count = 0
         self._selectable_count = 0
         self._header_checked = False
+        self._longest_versions = self._model.longest_versions()
+        self._longest_versions_path = ""
+        self._model.modelReset.connect(self._recompute_longest_versions)
+        self._model.dataChanged.connect(self._recompute_longest_versions)
 
         self._refresh_recents()
 
@@ -131,6 +136,11 @@ class ProjectController(QObject):
     @pyqtProperty(bool, notify=selectionChanged)
     def headerChecked(self) -> bool:
         return self._header_checked
+
+    @pyqtProperty("QVariantMap", notify=longestVersionsChanged)
+    def longestVersions(self) -> dict:
+        """Longest version per update column; the table keeps each column wide enough for it."""
+        return self._longest_versions
 
     # ── recents ────────────────────────────────────────────────────────────────
 
@@ -619,6 +629,18 @@ class ProjectController(QObject):
             self._selected_count = selected
             self._header_checked = header
             self.selectionChanged.emit()
+
+    def _recompute_longest_versions(self) -> None:
+        longest = self._model.longest_versions()
+        # While the open project's versions are being (re)fetched they only grow, so a
+        # refresh doesn't shrink the columns to "Loading…" and widen them again.
+        if (self._longest_versions_path == self._file_path
+                and any(d.fetch_status in ("loading", "pending") for d in self._deps)):
+            longest = {k: max(v, self._longest_versions[k], key=len) for k, v in longest.items()}
+        self._longest_versions_path = self._file_path
+        if longest != self._longest_versions:
+            self._longest_versions = longest
+            self.longestVersionsChanged.emit()
 
     def _save_pending(self) -> None:
         if not self._file_path:
