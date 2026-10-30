@@ -16,7 +16,7 @@ A desktop app for keeping your Maven dependencies up to date. It works with **Ma
 - **Property-aware updates** — versions managed through `<properties>` entries are resolved and updated at the property definition; every dependency sharing the property follows along
 - **Formatting-preserving writes** — updates are applied as exact in-place replacements, so comments, whitespace, and element order in your pom.xml survive untouched
 - **Per-dependency update button** — click ↑ on any version to write that single change to disk immediately, no re-fetch required
-- **Bulk updates** — select multiple dependencies with checkboxes (including a header _Select All_) and hit _Update Selected_, or use _Update All_ with a configurable scope (Patch & Minor only, or all levels including Major)
+- **Bulk updates** — select multiple dependencies with checkboxes (including a header _Select All_) and hit _Update Selected_, or use _Update All_ with a configurable scope (Patch only, Patch & Minor only, or all levels including Major)
 - **Build-tool aware** — detects the Maven Wrapper (`mvnw`) in the project or a parent directory (multi-module builds), and lets you choose a tool per folder; every command-line action uses the right one
 - **Resolve** — run the project's `dependency:resolve` from the toolbar to download the new versions; an in-app overlay streams the live output and reports success or failure
 - **Maven Central cache** — fetched version data is cached to disk with a configurable TTL so subsequent opens are instant; cache age is shown in Settings

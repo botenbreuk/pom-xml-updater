@@ -8,7 +8,9 @@ ColumnLayout {
     id: actionBar
 
     property string mode: "patch_minor"
-    readonly property string modeLabel: mode === "patch_minor" ? qsTr("Patch / Minor") : qsTr("All incl. Major")
+    readonly property string modeLabel: mode === "patch" ? qsTr("Patch")
+                                      : mode === "patch_minor" ? qsTr("Patch / Minor")
+                                      : qsTr("All incl. Major")
 
     signal resolveRequested()
 
@@ -73,6 +75,7 @@ ColumnLayout {
 
     AppMenu {
         id: modeMenu
+        AppMenuItem { text: qsTr("Patch only"); onTriggered: actionBar.mode = "patch" }
         AppMenuItem { text: qsTr("Patch / Minor only"); onTriggered: actionBar.mode = "patch_minor" }
         AppMenuItem { text: qsTr("All (including Major)"); onTriggered: actionBar.mode = "all" }
     }

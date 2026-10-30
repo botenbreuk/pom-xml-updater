@@ -425,6 +425,8 @@ class ProjectController(QObject):
 
     @staticmethod
     def _best(dep: DependencyInfo, mode: str) -> str | None:
+        if mode == "patch":
+            return dep.latest_patch
         if mode == "patch_minor":
             return dep.latest_minor or dep.latest_patch
         return dep.latest_major or dep.latest_minor or dep.latest_patch
@@ -447,7 +449,8 @@ class ProjectController(QObject):
                 "Nothing to update",
                 "No dependencies have available updates matching the selected mode.")
             return
-        label = "Patch & Minor only" if mode == "patch_minor" else "All (including Major)"
+        label = {"patch": "Patch only",
+                 "patch_minor": "Patch & Minor only"}.get(mode, "All (including Major)")
         self.confirmUpdateAll.emit(len(updates), label, mode)
 
     @pyqtSlot(str)
