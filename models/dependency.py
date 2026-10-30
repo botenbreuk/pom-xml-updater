@@ -13,6 +13,9 @@ class DependencyInfo:
     # Set when the version is defined via a <properties> entry:
     property_name: Optional[str] = None
 
+    # The <name> from the artifact's own POM in the local repository (None = unknown):
+    pom_name: Optional[str] = None
+
     # Populated after the Maven Central fetch:
     latest_patch: Optional[str] = None
     latest_minor: Optional[str] = None

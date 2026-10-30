@@ -13,7 +13,7 @@ from PyQt6.QtCore import (
 
 from core.version_cache import VersionCache
 from core.pom_xml import load as load_pom, save as save_pom
-from core.m2_repo import artifact_in_local_repo
+from core.m2_repo import artifact_in_local_repo, artifact_pom_name
 from models.dependency import DependencyInfo
 from models.settings import AppSettings
 from workers.fetch_worker import FetchWorker
@@ -174,6 +174,7 @@ class ProjectController(QObject):
         self._refresh_recents()
 
         self._restore_pending(path)
+        self._read_pom_names(self._deps)
 
         self._model.set_deps(self._deps)
         self.projectChanged.emit()
@@ -194,6 +195,13 @@ class ProjectController(QObject):
         self._pending_install_names = still_pending
         if still_pending != remembered:
             self._save_pending()
+
+    @staticmethod
+    def _read_pom_names(deps: list[DependencyInfo]) -> None:
+        """Label each dependency with the <name> from its own POM in the local
+        Maven repository; ones without keep showing their coordinates."""
+        for dep in deps:
+            dep.pom_name = artifact_pom_name(dep.name, dep.current_version)
 
     @pyqtSlot(QUrl)
     def openFileUrl(self, url: QUrl) -> None:
@@ -287,6 +295,7 @@ class ProjectController(QObject):
                 merged.append(new_dep)
         self._deps = merged
         self._by_rowkey = {d.row_key: d for d in merged}
+        self._read_pom_names(merged)
         self._model.set_deps(merged)
         self._recompute_counts()
 

@@ -47,7 +47,7 @@ def repo_label(url: str) -> str:
 # ── roles ──────────────────────────────────────────────────────────────────────
 
 _ROLE_NAMES = [
-    "rowId", "name", "propertyName", "group", "groupLabel", "rawConstraint",
+    "rowId", "name", "displayName", "propertyName", "group", "groupLabel", "rawConstraint",
     "currentVersion", "constraintType", "constraintTypeLabel", "currentAge",
     "needsInstall", "repoUrl", "repoLabel", "centralUrl", "fetchStatus",
     "errorMessage", "patchVersion", "minorVersion", "majorVersion", "patchAge",
@@ -95,6 +95,8 @@ class DependencyModel(QAbstractListModel):
             return rid
         if role == ROLE["name"]:
             return dep.name
+        if role == ROLE["displayName"]:
+            return dep.pom_name or dep.name
         if role == ROLE["propertyName"]:
             return dep.property_name or ""
         if role == ROLE["group"]:

@@ -11,6 +11,7 @@ Rectangle {
     required property int index
     required property string rowId
     required property string name
+    required property string displayName
     required property string propertyName
     required property string group
     required property string groupLabel
@@ -135,12 +136,21 @@ Rectangle {
                 spacing: 6
 
                 Text {
+                    id: nameText
                     Layout.fillWidth: true
-                    text: row.name
+                    text: row.displayName
                     font.family: Theme.monoFamily
                     font.pixelSize: 14
                     color: Theme.textTable
                     elide: Text.ElideRight
+
+                    HoverHandler { id: nameHover }
+                    AppToolTip {
+                        // The full coordinates, unless they are already shown in full.
+                        visible: nameHover.hovered && (row.displayName !== row.name || nameText.truncated)
+                        delay: 400
+                        text: row.name
+                    }
                 }
                 Text {
                     visible: row.propertyName !== ""

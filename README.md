@@ -12,6 +12,7 @@ A desktop app for keeping your Maven dependencies up to date. It works with **Ma
 
 - **Three-column update view** — Patch, Minor, and Major upgrades shown side by side with the release age of each version
 - **Version-type badge** — each row shows how the version is defined (Property `${…}`, Exact, Snapshot)
+- **Readable names** — each dependency is shown by the `<name>` from its own POM in your local Maven repository (`~/.m2`), no network needed; hover it for the full `groupId:artifactId`. Artifacts that aren't downloaded yet keep showing their coordinates
 - **Property-aware updates** — versions managed through `<properties>` entries are resolved and updated at the property definition; every dependency sharing the property follows along
 - **Formatting-preserving writes** — updates are applied as exact in-place replacements, so comments, whitespace, and element order in your pom.xml survive untouched
 - **Per-dependency update button** — click ↑ on any version to write that single change to disk immediately, no re-fetch required
