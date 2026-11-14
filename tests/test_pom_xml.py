@@ -292,6 +292,53 @@ class TestLoadEdgeCases(PomFileMixin):
         deps = load(self.path)
         self.assertEqual(len(deps), 1)
 
+    def test_property_named_like_a_pom_tag_is_not_that_tag(self) -> None:
+        # "-" and "." don't end a tag name: <dependency-check-maven.version> is
+        # not a <dependency>.  Each property below used to open a phantom
+        # element that ran on to the tag's next real closing tag, swallowing
+        # or hiding entries.  The parent sits after <properties> so a phantom
+        # section starting there would cover it.
+        pom = """<project>
+            <properties>
+                <PROP>1.0</PROP>
+                <lib.version>2.0</lib.version>
+            </properties>
+            <parent>
+                <groupId>org.p</groupId><artifactId>parent</artifactId>
+                <version>3.0</version>
+            </parent>
+            <dependencyManagement><dependencies><dependency>
+                <groupId>org.m</groupId><artifactId>bom</artifactId>
+                <version>${lib.version}</version>
+            </dependency></dependencies></dependencyManagement>
+            <dependencies><dependency>
+                <groupId>org.d</groupId><artifactId>lib</artifactId>
+                <version>${lib.version}</version>
+            </dependency></dependencies>
+            <build><plugins><plugin>
+                <groupId>org.b</groupId><artifactId>build-plugin</artifactId>
+                <version>4.0</version>
+            </plugin></plugins></build>
+            <reporting><plugins><plugin>
+                <groupId>org.r</groupId><artifactId>report-plugin</artifactId>
+                <version>5.0</version>
+            </plugin></plugins></reporting>
+            <profiles><profile><id>ci</id></profile></profiles>
+        </project>"""
+        expected = [
+            ("dependencyManagement", "org.m:bom"),
+            ("dependencies", "org.d:lib"),
+            ("plugins", "org.b:build-plugin"),
+            ("plugins", "org.r:report-plugin"),
+            ("parent", "org.p:parent"),
+        ]
+        for prop in ("dependency-check-maven.version", "dependencyManagement.note",
+                     "plugin.version", "build.timestamp", "reporting.note",
+                     "profiles.active"):
+            with self.subTest(prop=prop):
+                self.write(pom.replace("PROP", prop))
+                self.assertEqual([(d.group, d.name) for d in load(self.path)], expected)
+
 
 # ── saving ─────────────────────────────────────────────────────────────────
 

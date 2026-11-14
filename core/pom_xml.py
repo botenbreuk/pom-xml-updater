@@ -39,17 +39,23 @@ _INTERNAL_PROPS = {
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
 _CDATA_RE = re.compile(r"<!\[CDATA\[.*?]]>", re.S)
 
-_DEPENDENCY_RE = re.compile(r"<dependency\b[^>]*>.*?</dependency>", re.S)
-_PLUGIN_RE = re.compile(r"<plugin\b[^>]*>.*?</plugin>", re.S)
-_PARENT_RE = re.compile(r"<parent\b[^>]*>.*?</parent>", re.S)
-_PROPERTIES_RE = re.compile(r"<properties\b[^>]*>.*?</properties>", re.S)
+# Where a tag name ends. Not \b: "-" and "." are word boundaries but are part
+# of an XML name, so <dependency\b also matched the property
+# <dependency-check-maven.version>, which then ran on to the next
+# </dependency> and swallowed that dependency.
+_TAG_END = r"(?=[\s/>])"
+
+_DEPENDENCY_RE = re.compile(rf"<dependency{_TAG_END}[^>]*>.*?</dependency>", re.S)
+_PLUGIN_RE = re.compile(rf"<plugin{_TAG_END}[^>]*>.*?</plugin>", re.S)
+_PARENT_RE = re.compile(rf"<parent{_TAG_END}[^>]*>.*?</parent>", re.S)
+_PROPERTIES_RE = re.compile(rf"<properties{_TAG_END}[^>]*>.*?</properties>", re.S)
 
 _SECTION_RES = {
-    "profiles": re.compile(r"<profiles\b[^>]*>.*?</profiles>", re.S),
+    "profiles": re.compile(rf"<profiles{_TAG_END}[^>]*>.*?</profiles>", re.S),
     "dependencyManagement": re.compile(
-        r"<dependencyManagement\b[^>]*>.*?</dependencyManagement>", re.S),
-    "build": re.compile(r"<build\b[^>]*>.*?</build>", re.S),
-    "reporting": re.compile(r"<reporting\b[^>]*>.*?</reporting>", re.S),
+        rf"<dependencyManagement{_TAG_END}[^>]*>.*?</dependencyManagement>", re.S),
+    "build": re.compile(rf"<build{_TAG_END}[^>]*>.*?</build>", re.S),
+    "reporting": re.compile(rf"<reporting{_TAG_END}[^>]*>.*?</reporting>", re.S),
 }
 
 _PROP_ENTRY_RE = re.compile(r"<([A-Za-z_][\w.\-]*)>([^<]*)</\1>")
@@ -57,7 +63,8 @@ _PROP_REF_RE = re.compile(r"^\$\{([^}]+)\}$")
 
 # Child sections inside a block that may contain foreign <groupId>/<version>
 # tags (plugin configuration, plugin-level dependencies, exclusions).
-_BLOCK_CUT_RE = re.compile(r"<(configuration|executions|dependencies|exclusions|goals)\b")
+_BLOCK_CUT_RE = re.compile(
+    rf"<(configuration|executions|dependencies|exclusions|goals){_TAG_END}")
 
 
 @dataclass
