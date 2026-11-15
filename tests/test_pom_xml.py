@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from xml.parsers.expat import ExpatError
 
 from core.pom_xml import load, save
 
@@ -142,6 +143,14 @@ class PomFileMixin(unittest.TestCase):
 
     def read(self) -> str:
         with open(self.path, encoding="utf-8") as fh:
+            return fh.read()
+
+    def write_bytes(self, data: bytes) -> None:
+        with open(self.path, "wb") as fh:
+            fh.write(data)
+
+    def read_bytes(self) -> bytes:
+        with open(self.path, "rb") as fh:
             return fh.read()
 
     def dep(self, deps, name, group=None):
@@ -339,6 +348,113 @@ class TestLoadEdgeCases(PomFileMixin):
                 self.write(pom.replace("PROP", prop))
                 self.assertEqual([(d.group, d.name) for d in load(self.path)], expected)
 
+    def test_child_elements_in_any_order(self) -> None:
+        # Maven accepts a pom's child elements in any order, so <version> can
+        # come after <exclusions> or <configuration>.
+        self.write("""<project>
+            <dependencies><dependency>
+                <groupId>org.slf4j</groupId><artifactId>slf4j-api</artifactId>
+                <exclusions><exclusion>
+                    <groupId>org.excluded</groupId><artifactId>never-parsed</artifactId>
+                </exclusion></exclusions>
+                <version>2.0.9</version>
+            </dependency></dependencies>
+            <build><plugins><plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration><skipTests>true</skipTests></configuration>
+                <version>3.2.5</version>
+            </plugin></plugins></build>
+        </project>""")
+        self.assertEqual([(d.name, d.current_version) for d in load(self.path)], [
+            ("org.slf4j:slf4j-api", "2.0.9"),
+            ("org.apache.maven.plugins:maven-surefire-plugin", "3.2.5"),
+        ])
+
+    def test_plugins_nested_in_a_plugin_configuration_are_skipped(self) -> None:
+        # maven-site-plugin's <reportPlugins> holds <plugin> elements of its
+        # own.  The first one's </plugin> used to end the outer plugin, so the
+        # second one and the outer plugin's own dependency were listed.
+        self.write("""<project><build><plugins><plugin>
+            <artifactId>maven-site-plugin</artifactId>
+            <version>3.12.1</version>
+            <configuration><reportPlugins>
+                <plugin>
+                    <artifactId>maven-jxr-plugin</artifactId><version>3.3.0</version>
+                </plugin>
+                <plugin>
+                    <artifactId>maven-javadoc-plugin</artifactId><version>3.6.0</version>
+                </plugin>
+            </reportPlugins></configuration>
+            <dependencies><dependency>
+                <groupId>org.apache.maven.doxia</groupId>
+                <artifactId>doxia-module-markdown</artifactId>
+                <version>1.12.0</version>
+            </dependency></dependencies>
+        </plugin></plugins></build></project>""")
+        self.assertEqual([(d.group, d.name) for d in load(self.path)],
+                         [("plugins", "org.apache.maven.plugins:maven-site-plugin")])
+
+    def test_developer_properties_are_not_the_project_properties(self) -> None:
+        # A <developer> can have <properties> too, and <developers> comes
+        # first in the usual element order.  Those used to be taken for the
+        # project's, which left every ${...} version unresolved.
+        self.write("""<project>
+            <developers><developer>
+                <id>jdoe</id>
+                <properties><picUrl>https://example.org/jdoe.png</picUrl></properties>
+            </developer></developers>
+            <properties><guava.version>32.1.2-jre</guava.version></properties>
+            <dependencies><dependency>
+                <groupId>com.google.guava</groupId><artifactId>guava</artifactId>
+                <version>${guava.version}</version>
+            </dependency></dependencies>
+        </project>""")
+        guava = self.dep(load(self.path), "com.google.guava:guava")
+        self.assertEqual(guava.current_version, "32.1.2-jre")
+
+    def test_profiles_tag_in_a_plugin_configuration_does_not_end_profiles(self) -> None:
+        # A plugin can be configured with a <profiles> element of its own.
+        # Inside a profile, it used to end <profiles>, so the plugins of the
+        # profiles after it were listed.
+        self.write("""<project><profiles>
+            <profile><id>a</id><build><plugins><plugin>
+                <artifactId>maven-gpg-plugin</artifactId><version>3.2.8</version>
+                <configuration><profiles>keep</profiles></configuration>
+            </plugin></plugins></build></profile>
+            <profile><id>b</id><build><plugins><plugin>
+                <artifactId>maven-deploy-plugin</artifactId><version>3.1.1</version>
+            </plugin></plugins></build></profile>
+        </profiles></project>""")
+        self.assertEqual(load(self.path), [])
+
+    def test_xhtml_entity_in_a_developer_name(self) -> None:
+        # Maven predefines the XHTML entities, so poms do use them.
+        self.write("""<project>
+            <developers><developer><name>Trygve Laugst&oslash;l</name></developer></developers>
+            <dependencies><dependency>
+                <groupId>g</groupId><artifactId>a</artifactId><version>1.0</version>
+            </dependency></dependencies>
+        </project>""")
+        self.assertEqual([d.name for d in load(self.path)], ["g:a"])
+
+    def test_version_not_written_as_plain_text_is_skipped(self) -> None:
+        # save() replaces the version's bytes in the file, and these aren't "1.0".
+        for version in ("1&#46;0", "1.<!-- split -->0"):
+            with self.subTest(version=version):
+                self.write(f"""<project><dependencies><dependency>
+                    <groupId>g</groupId><artifactId>a</artifactId>
+                    <version>{version}</version>
+                </dependency></dependencies></project>""")
+                self.assertEqual(load(self.path), [])
+
+    def test_malformed_or_non_pom_file_raises(self) -> None:
+        for text, error in (("<project><dependencies></project>", ExpatError),
+                            ("<settings><dependencies/></settings>", ValueError)):
+            with self.subTest(text=text):
+                self.write(text)
+                with self.assertRaises(error):
+                    load(self.path)
+
 
 # ── saving ─────────────────────────────────────────────────────────────────
 
@@ -409,6 +525,43 @@ class TestSave(PomFileMixin):
         text = self.read()
         self.assertIn("<version>3.13.9</version>", text)
         self.assertIn("<version>2.0.12</version>", text)
+
+
+class TestSaveKeepsBytes(PomFileMixin):
+    """save() changes only the version's bytes, whatever else is in the file."""
+
+    def update(self, original: bytes) -> bytes:
+        self.write_bytes(original)
+        save(self.path, [(load(self.path)[0], "2.0")])
+        return self.read_bytes()
+
+    def test_crlf_line_endings(self) -> None:
+        original = (b"<project>\r\n"
+                    b"    <dependencies><dependency>\r\n"
+                    b"        <groupId>g</groupId><artifactId>a</artifactId>\r\n"
+                    b"        <version>1.0</version>\r\n"
+                    b"    </dependency></dependencies>\r\n"
+                    b"</project>\r\n")
+        self.assertEqual(self.update(original), original.replace(b"1.0", b"2.0"))
+
+    def test_encodings(self) -> None:
+        pom = ('<?xml version="1.0" encoding="{}"?>\n'
+               "<project><name>Café</name><dependencies><dependency>"
+               "<groupId>g</groupId><artifactId>a</artifactId><version>1.0</version>"
+               "</dependency></dependencies></project>\n")
+        for name, original in (
+                ("ISO-8859-1", pom.format("ISO-8859-1").encode("latin-1")),
+                ("UTF-8 with BOM", pom.format("UTF-8").encode("utf-8-sig"))):
+            with self.subTest(name):
+                self.assertEqual(self.update(original),
+                                 original.replace(b">1.0<", b">2.0<"))
+
+    def test_comment_beside_the_version(self) -> None:
+        original = (b"<project><dependencies><dependency>"
+                    b"<groupId>g</groupId><artifactId>a</artifactId>"
+                    b"<version>1.0<!-- pinned: see #12 --></version>"
+                    b"</dependency></dependencies></project>\n")
+        self.assertEqual(self.update(original), original.replace(b"1.0", b"2.0"))
 
 
 if __name__ == "__main__":

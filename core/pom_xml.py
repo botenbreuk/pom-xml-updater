@@ -2,9 +2,12 @@
 Read and update Maven pom.xml files while preserving formatting.
 No Qt dependency — pure Python.
 
-Parsing is deliberately text-based (regular expressions over the raw file)
-rather than DOM-based: updates are applied as exact byte-range replacements,
-so the file's formatting, comments, and element order are preserved untouched.
+The file is parsed with expat, the standard library's XML parser, but never
+written back from the parse result: ElementTree or minidom would re-serialize
+the whole file, rewriting the XML declaration, multi-line tags, empty tags
+and character references.  Instead the parse records the byte offset of each
+version text, and save() replaces only those bytes, so everything else
+(comments, line endings, the file's encoding) stays byte-identical.
 
 Sections processed:
     <dependencies>                      → group "dependencies"
@@ -19,10 +22,11 @@ references — are skipped: there is nothing meaningful to update for them.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from shutil import copy2
-from typing import Optional
+from typing import Iterator, Optional
+from xml.parsers import expat
 
 from models.dependency import DependencyInfo
 
@@ -36,35 +40,61 @@ _INTERNAL_PROPS = {
     "parent.version", "pom.version",
 }
 
-_COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
-_CDATA_RE = re.compile(r"<!\[CDATA\[.*?]]>", re.S)
-
-# Where a tag name ends. Not \b: "-" and "." are word boundaries but are part
-# of an XML name, so <dependency\b also matched the property
-# <dependency-check-maven.version>, which then ran on to the next
-# </dependency> and swallowed that dependency.
-_TAG_END = r"(?=[\s/>])"
-
-_DEPENDENCY_RE = re.compile(rf"<dependency{_TAG_END}[^>]*>.*?</dependency>", re.S)
-_PLUGIN_RE = re.compile(rf"<plugin{_TAG_END}[^>]*>.*?</plugin>", re.S)
-_PARENT_RE = re.compile(rf"<parent{_TAG_END}[^>]*>.*?</parent>", re.S)
-_PROPERTIES_RE = re.compile(rf"<properties{_TAG_END}[^>]*>.*?</properties>", re.S)
-
-_SECTION_RES = {
-    "profiles": re.compile(rf"<profiles{_TAG_END}[^>]*>.*?</profiles>", re.S),
-    "dependencyManagement": re.compile(
-        rf"<dependencyManagement{_TAG_END}[^>]*>.*?</dependencyManagement>", re.S),
-    "build": re.compile(rf"<build{_TAG_END}[^>]*>.*?</build>", re.S),
-    "reporting": re.compile(rf"<reporting{_TAG_END}[^>]*>.*?</reporting>", re.S),
+# The element path below <project> of each group's entries.  Nothing else is
+# read: not <profiles>, a plugin's own <dependencies> or <configuration>, or
+# a dependency's <exclusions>.
+_ENTRY_PATHS = {
+    ("dependencies", "dependency"): "dependencies",
+    ("dependencyManagement", "dependencies", "dependency"): "dependencyManagement",
+    ("build", "plugins", "plugin"): "plugins",
+    ("build", "pluginManagement", "plugins", "plugin"): "plugins",
+    ("reporting", "plugins", "plugin"): "plugins",
+    ("parent",): "parent",
 }
+_ENTRY_PATH_PREFIXES = {path[:i] for path in _ENTRY_PATHS for i in range(1, len(path))}
 
-_PROP_ENTRY_RE = re.compile(r"<([A-Za-z_][\w.\-]*)>([^<]*)</\1>")
+# load() lists dependencies first, then plugins, then the parent, each in
+# document order.
+_GROUP_ORDER = {"dependencies": 0, "dependencyManagement": 0, "plugins": 1, "parent": 2}
+
 _PROP_REF_RE = re.compile(r"^\$\{([^}]+)\}$")
 
-# Child sections inside a block that may contain foreign <groupId>/<version>
-# tags (plugin configuration, plugin-level dependencies, exclusions).
-_BLOCK_CUT_RE = re.compile(
-    rf"<(configuration|executions|dependencies|exclusions|goals){_TAG_END}")
+
+@dataclass
+class _Element:
+    """An element of the parsed pom."""
+    tag: str                                    # as written, e.g. "guava.version"
+    children: list[_Element] = field(default_factory=list)
+    # The element's own text in the chunks expat reports: (byte offset in the
+    # file, text).  The offset is None where the file's bytes are not
+    # literally that text, e.g. for &#46;.
+    chunks: list[tuple[Optional[int], str]] = field(default_factory=list)
+
+    @property
+    def name(self) -> str:
+        """The tag without a namespace prefix."""
+        return self.tag.rpartition(":")[2]
+
+    def child(self, name: str) -> Optional[_Element]:
+        return next((c for c in self.children if c.name == name), None)
+
+    def child_text(self, name: str) -> Optional[str]:
+        child = self.child(name)
+        return None if child is None else child.value()[0]
+
+    def value(self) -> tuple[str, Optional[tuple[int, int]]]:
+        """
+        The stripped text, and the byte span that save() may replace with a
+        new value: only set when the text is one plain run of bytes in the
+        file.  A comment beside the text is fine; a reference inside it isn't.
+        """
+        text = "".join(chunk for _, chunk in self.chunks).strip()
+        runs = [(at, chunk) for at, chunk in self.chunks if chunk.strip()]
+        if len(runs) != 1 or runs[0][0] is None:
+            return text, None
+        at, chunk = runs[0]
+        start = at + len(chunk) - len(chunk.lstrip())
+        return text, (start, start + len(text))
 
 
 @dataclass
@@ -72,7 +102,7 @@ class _Block:
     group: str                       # one of GROUPS
     name: str                        # "groupId:artifactId"
     raw_version: str                 # version text as written
-    version_span: tuple[int, int]    # absolute span of the version text
+    version_span: tuple[int, int]    # byte span of the version text in the file
     property_name: Optional[str]     # set when the version comes from a property
     current_version: str             # resolved version
 
@@ -80,16 +110,21 @@ class _Block:
 @dataclass
 class _PomIndex:
     blocks: list[_Block]
-    # property name → (value, absolute span of the value text)
-    properties: dict[str, tuple[str, tuple[int, int]]]
+    # property name → (value, byte span of the value, or None if that can't
+    # be replaced in place)
+    properties: dict[str, tuple[str, Optional[tuple[int, int]]]]
 
 
 # ── public API ───────────────────────────────────────────────────────────────
 
 def load(path: str) -> list[DependencyInfo]:
-    """Read *path* and return one :class:`DependencyInfo` per updatable entry."""
-    raw = Path(path).read_text(encoding="utf-8")
-    index = _parse(raw)
+    """
+    Read *path* and return one :class:`DependencyInfo` per updatable entry.
+
+    Raises :class:`xml.parsers.expat.ExpatError` when the file isn't
+    well-formed XML, and :class:`ValueError` when it isn't a pom.
+    """
+    index = _parse(Path(path).read_bytes())
 
     deps: list[DependencyInfo] = []
     seen: set[tuple] = set()
@@ -117,23 +152,23 @@ def save(path: str, updates: list[tuple[DependencyInfo, str]]) -> None:
     versions are updated at the property definition; literal versions are
     replaced in place.  Everything else in the file is left byte-identical.
     """
-    raw = Path(path).read_text(encoding="utf-8")
-    index = _parse(raw)
+    data = Path(path).read_bytes()
+    index = _parse(data)
 
     blocks_by_key = {}
     for block in index.blocks:
         blocks_by_key.setdefault((block.name, block.group, block.property_name), block)
 
-    edits: dict[tuple[int, int], str] = {}
+    edits: dict[tuple[int, int], bytes] = {}
     for dep, new_version in updates:
         if dep.property_name is not None:
             entry = index.properties.get(dep.property_name)
-            if entry is not None:
-                edits[entry[1]] = new_version
+            if entry is not None and entry[1] is not None:
+                edits[entry[1]] = new_version.encode("ascii")
         else:
             block = blocks_by_key.get((dep.name, dep.group, None))
             if block is not None:
-                edits[block.version_span] = new_version
+                edits[block.version_span] = new_version.encode("ascii")
 
     if not edits:
         return
@@ -141,12 +176,11 @@ def save(path: str, updates: list[tuple[DependencyInfo, str]]) -> None:
     bak = path + ".bak"
     copy2(path, bak)   # backup before any changes
 
-    text = raw
     for (start, end), replacement in sorted(edits.items(), reverse=True):
-        text = text[:start] + replacement + text[end:]
+        data = data[:start] + replacement + data[end:]
 
     try:
-        Path(path).write_text(text, encoding="utf-8")
+        Path(path).write_bytes(data)
     except Exception:
         raise   # backup remains so the original can be recovered
     else:
@@ -155,55 +189,90 @@ def save(path: str, updates: list[tuple[DependencyInfo, str]]) -> None:
 
 # ── parsing ──────────────────────────────────────────────────────────────────
 
-def _parse(raw: str) -> _PomIndex:
-    scanned = _blank(_blank(raw, _COMMENT_RE), _CDATA_RE)
+def _parse(data: bytes) -> _PomIndex:
+    project = _read_tree(data)
 
-    sections = {name: [m.span() for m in rx.finditer(scanned)]
-                for name, rx in _SECTION_RES.items()}
-    plugin_spans = [m.span() for m in _PLUGIN_RE.finditer(scanned)]
+    section = project.child("properties")
+    properties = ({entry.tag: entry.value() for entry in section.children}
+                  if section is not None else {})
 
-    properties = _parse_properties(scanned, sections, plugin_spans)
-
-    blocks: list[_Block] = []
-
-    for m in _DEPENDENCY_RE.finditer(scanned):
-        if _inside(m.start(), sections["profiles"]) or _inside(m.start(), plugin_spans):
-            continue
-        group = ("dependencyManagement"
-                 if _inside(m.start(), sections["dependencyManagement"])
-                 else "dependencies")
-        block = _read_block(scanned, m, group, properties)
-        if block is not None:
-            blocks.append(block)
-
-    for m in _PLUGIN_RE.finditer(scanned):
-        if _inside(m.start(), sections["profiles"]):
-            continue
-        block = _read_block(scanned, m, "plugins", properties,
-                            default_group_id=DEFAULT_PLUGIN_GROUP)
-        if block is not None:
-            blocks.append(block)
-
-    for m in _PARENT_RE.finditer(scanned):
-        if any(_inside(m.start(), sections[s])
-               for s in ("profiles", "build", "reporting", "dependencyManagement")):
-            continue
-        block = _read_block(scanned, m, "parent", properties)
-        if block is not None:
-            blocks.append(block)
-        break   # a pom has at most one project-level <parent>
-
+    entries = sorted(_entries(project), key=lambda entry: _GROUP_ORDER[entry[0]])
+    blocks = [block for group, element in entries
+              if (block := _read_block(element, group, properties)) is not None]
     return _PomIndex(blocks=blocks, properties=properties)
 
 
-def _read_block(scanned: str, match: re.Match, group: str,
-                properties: dict, default_group_id: str | None = None) -> Optional[_Block]:
-    body = match.group(0)
-    cut = _BLOCK_CUT_RE.search(body)
-    head = body[:cut.start()] if cut else body
+def _read_tree(data: bytes) -> _Element:
+    """Parse *data*, the file's bytes, and return its <project> element."""
+    parser = expat.ParserCreate()
+    roots: list[_Element] = []
+    stack: list[_Element] = []
 
-    group_id = _tag_text(head, "groupId") or default_group_id
-    artifact_id = _tag_text(head, "artifactId")
+    def start(tag: str, _attributes: dict) -> None:
+        element = _Element(tag)
+        (stack[-1].children if stack else roots).append(element)
+        stack.append(element)
+
+    def end(_tag: str) -> None:
+        stack.pop()
+
+    def text(chunk: str) -> None:
+        # With buffer_text off (the default), CurrentByteIndex is where the
+        # chunk starts in *data*.  Keep that offset only if the bytes there
+        # are this very text: not for a reference such as &#46; (or &amp;,
+        # whose "&" would match its first byte), a CRLF delivered as "\n",
+        # or non-ASCII text.
+        at: Optional[int] = parser.CurrentByteIndex
+        if (at < 0 or chunk.startswith("&") or not chunk.isascii()
+                or not data.startswith(chunk.encode("ascii"), at)):
+            at = None
+        element = stack[-1]
+        if at is not None and element.chunks:
+            last_at, last = element.chunks[-1]
+            if last_at is not None and last_at + len(last) == at:
+                element.chunks[-1] = (last_at, last + chunk)   # one run, split by expat
+                return
+        element.chunks.append((at, chunk))
+
+    def skipped(name: str, is_parameter_entity: bool) -> None:
+        # An entity expat doesn't know, such as &oslash; in a developer's
+        # name: Maven predefines the XHTML entities.  Its text is unknown
+        # here, so a value containing it can't be replaced.
+        if stack and not is_parameter_entity:
+            stack[-1].chunks.append((None, f"&{name};"))
+
+    # As if there were an external DTD: an undeclared entity is then skipped
+    # instead of being an error.
+    parser.UseForeignDTD(True)
+    parser.StartElementHandler = start
+    parser.EndElementHandler = end
+    parser.CharacterDataHandler = text
+    parser.SkippedEntityHandler = skipped
+    parser.Parse(data, True)
+
+    project = roots[0]
+    if project.name != "project":
+        raise ValueError(f"not a Maven pom: the root element is <{project.tag}>, "
+                         "not <project>")
+    return project
+
+
+def _entries(node: _Element,
+             path: tuple[str, ...] = ()) -> Iterator[tuple[str, _Element]]:
+    """(group, element) for every entry below *node*, in document order."""
+    for child in node.children:
+        child_path = (*path, child.name)
+        if child_path in _ENTRY_PATHS:
+            yield _ENTRY_PATHS[child_path], child
+        elif child_path in _ENTRY_PATH_PREFIXES:
+            yield from _entries(child, child_path)
+
+
+def _read_block(element: _Element, group: str, properties: dict) -> Optional[_Block]:
+    group_id = element.child_text("groupId")
+    if not group_id and group == "plugins":
+        group_id = DEFAULT_PLUGIN_GROUP
+    artifact_id = element.child_text("artifactId")
     if not group_id or not artifact_id:
         return None
 
@@ -212,11 +281,13 @@ def _read_block(scanned: str, match: re.Match, group: str,
     if group_id is None or artifact_id is None:
         return None
 
-    version_match = re.search(r"<version>([^<]*)</version>", head)
-    if version_match is None:
+    version = element.child("version")
+    if version is None:
         return None   # managed by a parent / BOM — nothing to update here
 
-    raw_version, span = _trimmed_span(version_match, offset=match.start())
+    raw_version, span = version.value()
+    if span is None:
+        return None   # empty, or not plain text in the file — can't be replaced
     resolved, property_name = _resolve_version(raw_version, properties)
     if resolved is None:
         return None
@@ -231,23 +302,6 @@ def _read_block(scanned: str, match: re.Match, group: str,
     )
 
 
-def _parse_properties(scanned: str, sections: dict, plugin_spans: list) -> dict:
-    """The project-level <properties> entries with the spans of their values."""
-    for m in _PROPERTIES_RE.finditer(scanned):
-        if any(_inside(m.start(), sections[s])
-               for s in ("profiles", "build", "reporting")):
-            continue
-        if _inside(m.start(), plugin_spans):
-            continue
-        entries: dict[str, tuple[str, tuple[int, int]]] = {}
-        for entry in _PROP_ENTRY_RE.finditer(m.group(0)):
-            value = entry.group(2).strip()
-            start = m.start() + entry.start(2) + (len(entry.group(2)) - len(entry.group(2).lstrip()))
-            entries[entry.group(1)] = (value, (start, start + len(value)))
-        return entries
-    return {}
-
-
 def _resolve_version(raw: str, properties: dict,
                      ) -> tuple[Optional[str], Optional[str]]:
     """
@@ -256,8 +310,9 @@ def _resolve_version(raw: str, properties: dict,
     ``property_name`` is the property whose *literal* value defines the
     version (following up to three hops of ``${a}`` → ``${b}`` indirection),
     or None for a literal version.  Returns (None, None) for anything that is
-    not updatable: internal references, unknown properties, ranges, and the
-    LATEST / RELEASE special versions.
+    not updatable: internal references, unknown properties, property values
+    that can't be replaced in place, ranges, and the LATEST / RELEASE special
+    versions.
     """
     text = raw.strip()
     property_name: Optional[str] = None
@@ -271,10 +326,10 @@ def _resolve_version(raw: str, properties: dict,
         if prop in _INTERNAL_PROPS or prop.startswith("project."):
             return None, None
         entry = properties.get(prop)
-        if entry is None:
+        if entry is None or entry[1] is None:
             return None, None
         property_name = prop
-        text = entry[0].strip()
+        text = entry[0]
 
     if not text or "${" in text:   # empty or partially interpolated, e.g. 1.2.${patch}
         return None, None
@@ -292,28 +347,3 @@ def _resolve_coordinate(text: str, properties: dict) -> Optional[str]:
     if entry is None or not entry[0] or _PROP_REF_RE.match(entry[0]):
         return None
     return entry[0]
-
-
-# ── helpers ──────────────────────────────────────────────────────────────────
-
-def _blank(text: str, regex: re.Pattern) -> str:
-    """Replace every match with same-length whitespace so offsets stay valid."""
-    return regex.sub(lambda m: " " * (m.end() - m.start()), text)
-
-
-def _inside(pos: int, spans: list[tuple[int, int]]) -> bool:
-    return any(start < pos < end for start, end in spans)
-
-
-def _tag_text(fragment: str, tag: str) -> Optional[str]:
-    m = re.search(rf"<{tag}>([^<]*)</{tag}>", fragment)
-    return m.group(1).strip() if m else None
-
-
-def _trimmed_span(match: re.Match, offset: int) -> tuple[str, tuple[int, int]]:
-    """The stripped text of capture group 1 and its absolute span."""
-    value = match.group(1)
-    lead = len(value) - len(value.lstrip())
-    stripped = value.strip()
-    start = offset + match.start(1) + lead
-    return stripped, (start, start + len(stripped))
